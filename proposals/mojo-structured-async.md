@@ -559,7 +559,7 @@ async fn evil_fanout(data: List[Foo]):
 
 As you can see, entirely by accident, Mojo has solved one of the largest
 ergonomics issues with Rust async, that being the proliferation of `'static`
-bounds, entirely by accident. With the introduction of linear types, simply
+bounds. With the introduction of linear types, simply
 making the `ChildTask` struct linear stops all of the issues that made this API
 impossible to do soundly in Rust. In fact, members of the Rust community have
 suggested adding linear types to Rust explicitly to solve this issue. All of the
@@ -617,7 +617,7 @@ analysis in the compiler when assembling the type. I personally think that a
 fairly large amount of compile-time overhead is acceptable for this feature
 since it should be in the "you only pay for it if you use it" category, and
 because it should have runtime performance benefits. Another downside of this
-fusion is that it  and it prevents recursive coroutines without adding
+fusion is that it prevents recursive coroutines without adding
 indirection. For the most part, the only solutions I've seen to this issue
 either involve forcing indirection (C++) or stackful coroutines (Go), neither of
 which I am particularly fond of due to the overhead, pointer chasing for C++,
