@@ -88,7 +88,7 @@ struct ImplicitCopyOnly(Copyable):
 # ===----------------------------------------------------------------------=== #
 
 
-struct CopyCounter(CollectionElement, ExplicitlyCopyable):
+struct CopyCounter(CollectionElement, ExplicitlyCopyable, Writable):
     """Counts the number of copies performed on a value."""
 
     var copy_count: Int
@@ -108,6 +108,11 @@ struct CopyCounter(CollectionElement, ExplicitlyCopyable):
     fn copy(self) -> Self:
         return self
 
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write("CopyCounter(")
+        writer.write(String(self.copy_count))
+        writer.write(")")
+
 
 # ===----------------------------------------------------------------------=== #
 # MoveCounter
@@ -117,6 +122,7 @@ struct CopyCounter(CollectionElement, ExplicitlyCopyable):
 struct MoveCounter[T: CollectionElementNew](
     CollectionElement,
     CollectionElementNew,
+    Writable,
 ):
     """Counts the number of moves performed on a value."""
 
@@ -154,6 +160,11 @@ struct MoveCounter[T: CollectionElementNew](
 
     fn copy(self) -> Self:
         return self
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write("MoveCounter(")
+        writer.write(String(self.move_count))
+        writer.write(")")
 
 
 # ===----------------------------------------------------------------------=== #

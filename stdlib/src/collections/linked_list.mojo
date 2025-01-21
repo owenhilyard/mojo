@@ -17,25 +17,29 @@ from collections._index_normalization import normalize_index
 
 
 @value
-struct Node[ElementType: WritableCollectionElement]:
+struct Node[
+    ElementType: CollectionElement,
+]:
     """A node in a linked list data structure.
 
     Parameters:
         ElementType: The type of element stored in the node.
     """
 
+    alias NodePointer = UnsafePointer[Self]
+
     var value: ElementType
     """The value stored in this node."""
-    var prev: UnsafePointer[Node[ElementType]]
+    var prev: Self.NodePointer
     """The previous node in the list."""
-    var next: UnsafePointer[Node[ElementType]]
+    var next: Self.NodePointer
     """The next node in the list."""
 
     fn __init__(
         out self,
         owned value: ElementType,
-        prev: Optional[UnsafePointer[Node[ElementType]]],
-        next: Optional[UnsafePointer[Node[ElementType]]],
+        prev: Optional[Self.NodePointer],
+        next: Optional[Self.NodePointer],
     ):
         """Initialize a new Node with the given value and optional prev/next
         pointers.
@@ -49,19 +53,29 @@ struct Node[ElementType: WritableCollectionElement]:
         self.prev = prev.value() if prev else __type_of(self.prev)()
         self.next = next.value() if next else __type_of(self.next)()
 
-    fn __str__(self) -> String:
+    fn __str__[
+        ElementType: WritableCollectionElement
+    ](self: Node[ElementType]) -> String:
         """Convert this node's value to a string representation.
+
+        Parameters:
+            ElementType: Used to conditionally enable this function if
+              `ElementType` is `Writable`.
 
         Returns:
             String representation of the node's value.
         """
-        return String.write(self)
+        return String.write(self.value)
 
     @no_inline
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to[
+        ElementType: WritableCollectionElement, W: Writer
+    ](self: Node[ElementType], mut writer: W):
         """Write this node's value to the given writer.
 
         Parameters:
+            ElementType: Used to conditionally enable this function if
+              `ElementType` is `Writable`.
             W: The type of writer to write the value to.
 
         Args:
@@ -70,7 +84,9 @@ struct Node[ElementType: WritableCollectionElement]:
         writer.write(self.value)
 
 
-struct LinkedList[ElementType: WritableCollectionElement]:
+struct LinkedList[
+    ElementType: CollectionElement,
+]:
     """A doubly-linked list implementation.
 
     A doubly-linked list is a data structure where each element points to both
@@ -79,12 +95,14 @@ struct LinkedList[ElementType: WritableCollectionElement]:
 
     Parameters:
         ElementType: The type of elements stored in the list. Must implement
-            WritableCollectionElement.
+         CollectionElement.
     """
 
-    var _head: UnsafePointer[Node[ElementType]]
+    alias NodePointer = UnsafePointer[Node[ElementType]]
+
+    var _head: Self.NodePointer
     """The first node in the list."""
-    var _tail: UnsafePointer[Node[ElementType]]
+    var _tail: Self.NodePointer
     """The last node in the list."""
     var _size: Int
     """The number of elements in the list."""
@@ -104,20 +122,36 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         self = Self(elements=elements^)
 
     fn __init__(out self, *, owned elements: VariadicListMem[ElementType, _]):
-        """Initialize a linked list with the given elements.
+        """
+        Construct a list from a `VariadicListMem`.
 
         Args:
-            elements: Variable number of elements to initialize the list with.
+            elements: The elements to add to the list.
         """
         self = Self()
 
-        for elem in elements:
-            self.append(elem[])
+        var length = len(elements)
+
+        for i in range(length):
+            var src = UnsafePointer.address_of(elements[i])
+            var node = Self.NodePointer.alloc(1)
+            var dst = UnsafePointer.address_of(node[].value)
+            src.move_pointee_into(dst)
+            node[].next = Self.NodePointer()
+            node[].prev = self._tail
+            if not self._tail:
+                self._head = node
+                self._tail = node
+            else:
+                self._tail[].next = node
+                self._tail = node
 
         # Do not destroy the elements when their backing storage goes away.
         __mlir_op.`lit.ownership.mark_destroyed`(
             __get_mvalue_as_litref(elements)
         )
+
+        self._size = length
 
     fn __copyinit__(mut self, read other: Self):
         """Initialize this list as a copy of another list.
@@ -125,9 +159,7 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         Args:
             other: The list to copy from.
         """
-        self._head = other._head
-        self._tail = other._tail
-        self._size = other._size
+        self = other.copy()
 
     fn __moveinit__(mut self, owned other: Self):
         """Initialize this list by moving elements from another list.
@@ -157,10 +189,12 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         Args:
             value: The value to append.
         """
-        var node = Node(value^, self._tail, None)
-        var addr = UnsafePointer[__type_of(node)].alloc(1)
-        addr.init_pointee_move(node)
-        if self:
+        var addr = Self.NodePointer.alloc(1)
+        var value_ptr = UnsafePointer.address_of(addr[].value)
+        value_ptr.init_pointee_move(value^)
+        addr[].prev = self._tail
+        addr[].next = Self.NodePointer()
+        if self._tail:
             self._tail[].next = addr
         else:
             self._head = addr
@@ -195,19 +229,137 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         self._tail = self._head
         self._head = prev
 
-    fn pop(mut self) -> ElementType:
-        """Remove and return the first element of the list.
+    fn pop(mut self) raises -> ElementType:
+        """Remove and return the last element of the list.
 
         Returns:
-            The first element in the list.
+            The last element in the list.
         """
         var elem = self._tail
+        if not elem:
+            raise "Pop on empty list."
+
         var value = elem[].value
         self._tail = elem[].prev
         self._size -= 1
         if self._size == 0:
             self._head = __type_of(self._head)()
+        else:
+            self._tail[].next = Self.NodePointer()
+        elem.free()
         return value^
+
+    fn pop[I: Indexer](mut self, owned i: I) raises -> ElementType:
+        """
+        Remove the ith element of the list, counting from the tail if
+        given a negative index.
+
+        Parameters:
+            I: The type of index to use.
+
+        Args:
+            i: The index of the element to get.
+
+        Returns:
+            Ownership of the indicated element.
+        """
+        var current = self._get_node_ptr(Int(i))
+
+        if not current:
+            raise "Invalid index for pop"
+        else:
+            var node = current[]
+            if node.prev:
+                node.prev[].next = node.next
+            else:
+                self._head = node.next
+            if node.next:
+                node.next[].prev = node.prev
+            else:
+                self._tail = node.prev
+
+            var data = node.value^
+
+            # Aside from T, destructor is trivial
+            __mlir_op.`lit.ownership.mark_destroyed`(
+                __get_mvalue_as_litref(node)
+            )
+            current.free()
+            self._size -= 1
+            return data^
+
+    fn pop_if_present(mut self) -> Optional[ElementType]:
+        """Removes the head of the list and returns it, if it exists.
+
+        Returns:
+            The head of the list, if it was present.
+        """
+        var elem = self._tail
+        if not elem:
+            return Optional[ElementType]()
+        var value = elem[].value
+        self._tail = elem[].prev
+        self._size -= 1
+        if self._size == 0:
+            self._head = __type_of(self._head)()
+        else:
+            self._tail[].next = Self.NodePointer()
+        elem.free()
+        return value^
+
+    fn pop_if_present[
+        I: Indexer
+    ](mut self, owned i: I) -> Optional[ElementType]:
+        """
+        Remove the ith element of the list, counting from the tail if
+        given a negative index.
+
+        Parameters:
+            I: The type of index to use.
+
+        Args:
+            i: The index of the element to get.
+
+        Returns:
+            The element, if it was found.
+        """
+        var current = self._get_node_ptr(Int(i))
+
+        if not current:
+            return Optional[ElementType]()
+        else:
+            var node = current[]
+            if node.prev:
+                node.prev[].next = node.next
+            else:
+                self._head = node.next
+            if node.next:
+                node.next[].prev = node.prev
+            else:
+                self._tail = node.prev
+
+            var data = node.value^
+
+            # Aside from T, destructor is trivial
+            __mlir_op.`lit.ownership.mark_destroyed`(
+                __get_mvalue_as_litref(node)
+            )
+            current.free()
+            self._size -= 1
+            return Optional[ElementType](data^)
+
+    fn clear(mut self):
+        """Removes all elements from the list."""
+        var current = self._head
+        while current:
+            var old = current
+            current = current[].next
+            old.destroy_pointee()
+            old.free()
+
+        self._head = Self.NodePointer()
+        self._tail = Self.NodePointer()
+        self._size = 0
 
     fn copy(self) -> Self:
         """Create a deep copy of the list.
@@ -221,6 +373,180 @@ struct LinkedList[ElementType: WritableCollectionElement]:
             new.append(curr[].value)
             curr = curr[].next
         return new^
+
+    fn insert(mut self, owned idx: Int, owned elem: ElementType) raises:
+        """
+        Insert an element `elem` into the list at index `idx`.
+
+        Args:
+            idx: The index to insert `elem` at.
+            elem: The item to insert into the list.
+        """
+        var i = max(0, index(idx) if idx >= 0 else index(idx) + len(self))
+
+        if i == 0:
+            var node = Self.NodePointer.alloc(1)
+            if not node:
+                raise "OOM"
+            node.init_pointee_move(
+                Node[ElementType](elem^, Self.NodePointer(), Self.NodePointer())
+            )
+
+            if self._head:
+                node[].next = self._head
+                self._head[].prev = node
+
+            self._head = node
+
+            if not self._tail:
+                self._tail = node
+
+            self._size += 1
+            return
+
+        i -= 1
+
+        var current = self._get_node_ptr(i)
+        if current:
+            var next = current[].next
+            var node = Self.NodePointer.alloc(1)
+            if not node:
+                raise "OOM"
+            var data = UnsafePointer.address_of(node[].value)
+            data[] = elem^
+            node[].next = next
+            node[].prev = current
+            if next:
+                next[].prev = node
+            current[].next = node
+            if node[].next == Self.NodePointer():
+                self._tail = node
+            if node[].prev == Self.NodePointer():
+                self._head = node
+            self._size += 1
+        else:
+            raise "index out of bounds"
+
+    fn extend(mut self, owned other: Self):
+        """
+        Extends the list with another.
+        O(1) time complexity.
+
+        Args:
+            other: The list to append to this one.
+        """
+        if self._tail:
+            self._tail[].next = other._head
+            if other._head:
+                other._head[].prev = self._tail
+            if other._tail:
+                self._tail = other._tail
+
+            self._size += other._size
+        else:
+            self._head = other._head
+            self._tail = other._tail
+            self._size = other._size
+
+        other._head = Self.NodePointer()
+        other._tail = Self.NodePointer()
+
+    fn count[
+        ElementType: EqualityComparableCollectionElement
+    ](self: LinkedList[ElementType], read elem: ElementType) -> UInt:
+        """
+        Count the occurrences of `elem` in the list.
+
+        Parameters:
+            ElementType: The list element type, used to conditionally enable the function.
+
+        Args:
+            elem: The element to search for.
+
+        Returns:
+            The number of occurrences of `elem` in the list.
+        """
+        var current = self._head
+        var count = 0
+        while current:
+            if current[].value == elem:
+                count += 1
+
+            current = current[].next
+
+        return count
+
+    fn __contains__[
+        ElementType: EqualityComparableCollectionElement, //
+    ](self: LinkedList[ElementType], value: ElementType) -> Bool:
+        """
+        Checks if the list contains `value`.
+
+        Parameters:
+            ElementType: The list element type, used to conditionally enable the function.
+
+        Args:
+            value: The value to search for in the list.
+
+        Returns:
+            Whether the list contains `value`.
+        """
+        var current = self._head
+        while current:
+            if current[].value == value:
+                return True
+            current = current[].next
+
+        return False
+
+    fn __eq__[
+        ElementType: EqualityComparableCollectionElement, //
+    ](
+        read self: LinkedList[ElementType], read other: LinkedList[ElementType]
+    ) -> Bool:
+        """
+        Checks if the two lists are equal.
+
+        Parameters:
+            ElementType: The list element type, used to conditionally enable the function.
+
+        Args:
+            other: The list to compare to.
+
+        Returns:
+            Whether the lists are equal.
+        """
+        if self._size != other._size:
+            return False
+
+        var self_cursor = self._head
+        var other_cursor = other._head
+
+        while self_cursor:
+            if self_cursor[].value != other_cursor[].value:
+                return False
+
+            self_cursor = self_cursor[].next
+            other_cursor = other_cursor[].next
+
+        return True
+
+    fn __ne__[
+        ElementType: EqualityComparableCollectionElement, //
+    ](self: LinkedList[ElementType], other: LinkedList[ElementType]) -> Bool:
+        """
+        Checks if the two lists are not equal.
+
+        Parameters:
+            ElementType: The list element type, used to conditionally enable the function.
+
+        Args:
+            other: The list to compare to.
+
+        Returns:
+            Whether the lists are not equal.
+        """
+        return not (self == other)
 
     fn _get_node_ptr(ref self, index: Int) -> UnsafePointer[Node[ElementType]]:
         """Get a pointer to the node at the specified index.
@@ -287,16 +613,30 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         """
         return len(self) != 0
 
-    fn __str__(self) -> String:
+    fn __str__[
+        ElementType: WritableCollectionElement
+    ](self: LinkedList[ElementType]) -> String:
         """Convert the list to its string representation.
+
+        Parameters:
+            ElementType: Used to conditionally enable this function when
+             `ElementType` is `Writable`.
 
         Returns:
             String representation of the list.
         """
-        return String.write(self)
+        var writer = String()
+        self._write(writer)
+        return writer
 
-    fn __repr__(self) -> String:
+    fn __repr__[
+        ElementType: WritableCollectionElement
+    ](self: LinkedList[ElementType]) -> String:
         """Convert the list to its string representation.
+
+        Parameters:
+            ElementType: Used to conditionally enable this function when
+             `ElementType` is `Writable`.
 
         Returns:
             String representation of the list.
@@ -305,11 +645,15 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         self._write(writer, prefix="LinkedList(", suffix=")")
         return writer
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to[
+        W: Writer, ElementType: WritableCollectionElement
+    ](self: LinkedList[ElementType], mut writer: W):
         """Write the list to the given writer.
 
         Parameters:
             W: The type of writer to write the list to.
+            ElementType: Used to conditionally enable this function when
+             `ElementType` is `Writable`.
 
         Args:
             writer: The writer to write the list to.
@@ -318,8 +662,14 @@ struct LinkedList[ElementType: WritableCollectionElement]:
 
     @no_inline
     fn _write[
-        W: Writer
-    ](self, mut writer: W, *, prefix: String = "[", suffix: String = "]"):
+        W: Writer, ElementType: WritableCollectionElement
+    ](
+        self: LinkedList[ElementType],
+        mut writer: W,
+        *,
+        prefix: String = "[",
+        suffix: String = "]",
+    ):
         if not self:
             return writer.write(prefix, suffix)
 
@@ -328,6 +678,6 @@ struct LinkedList[ElementType: WritableCollectionElement]:
         for i in range(len(self)):
             if i:
                 writer.write(", ")
-            writer.write(curr[])
+            writer.write(curr[].value)
             curr = curr[].next
         writer.write(suffix)
