@@ -14,6 +14,7 @@
 from memory import UnsafePointer
 from collections import Optional
 from collections._index_normalization import normalize_index
+from os import abort
 
 
 @value
@@ -26,20 +27,20 @@ struct Node[
         ElementType: The type of element stored in the node.
     """
 
-    alias NodePointer = UnsafePointer[Self]
+    alias _NodePointer = UnsafePointer[Self]
 
     var value: ElementType
     """The value stored in this node."""
-    var prev: Self.NodePointer
+    var prev: Self._NodePointer
     """The previous node in the list."""
-    var next: Self.NodePointer
+    var next: Self._NodePointer
     """The next node in the list."""
 
     fn __init__(
         out self,
         owned value: ElementType,
-        prev: Optional[Self.NodePointer],
-        next: Optional[Self.NodePointer],
+        prev: Optional[Self._NodePointer],
+        next: Optional[Self._NodePointer],
     ):
         """Initialize a new Node with the given value and optional prev/next
         pointers.
@@ -50,8 +51,8 @@ struct Node[
             next: Optional pointer to the next node.
         """
         self.value = value^
-        self.prev = prev.value() if prev else __type_of(self.prev)()
-        self.next = next.value() if next else __type_of(self.next)()
+        self.prev = prev.value() if prev else Self._NodePointer()
+        self.next = next.value() if next else Self._NodePointer()
 
     fn __str__[
         ElementType: WritableCollectionElement
@@ -98,23 +99,29 @@ struct LinkedList[
          CollectionElement.
     """
 
-    alias NodePointer = UnsafePointer[Node[ElementType]]
+    alias _NodePointer = UnsafePointer[Node[ElementType]]
 
-    var _head: Self.NodePointer
+    var _head: Self._NodePointer
     """The first node in the list."""
-    var _tail: Self.NodePointer
+    var _tail: Self._NodePointer
     """The last node in the list."""
     var _size: Int
     """The number of elements in the list."""
 
     fn __init__(out self):
-        """Initialize an empty linked list."""
-        self._head = __type_of(self._head)()
-        self._tail = __type_of(self._tail)()
+        """
+        Initialize an empty linked list.
+
+        Time Complexity: O(1)
+        """
+        self._head = Self._NodePointer()
+        self._tail = Self._NodePointer()
         self._size = 0
 
     fn __init__(mut self, owned *elements: ElementType):
         """Initialize a linked list with the given elements.
+
+        Time Complexity: O(n) in len(elements)
 
         Args:
             elements: Variable number of elements to initialize the list with.
@@ -125,6 +132,8 @@ struct LinkedList[
         """
         Construct a list from a `VariadicListMem`.
 
+        Time Complexity: O(n) in len(elements)
+
         Args:
             elements: The elements to add to the list.
         """
@@ -134,16 +143,18 @@ struct LinkedList[
 
         for i in range(length):
             var src = UnsafePointer.address_of(elements[i])
-            var node = Self.NodePointer.alloc(1)
+            var node = Self._NodePointer.alloc(1)
+            if not node:
+                abort("Out of memory")
             var dst = UnsafePointer.address_of(node[].value)
             src.move_pointee_into(dst)
-            node[].next = Self.NodePointer()
+            node[].next = Self._NodePointer()
             node[].prev = self._tail
-            if not self._tail:
-                self._head = node
+            if self._tail:
+                self._tail[].next = node
                 self._tail = node
             else:
-                self._tail[].next = node
+                self._head = node
                 self._tail = node
 
         # Do not destroy the elements when their backing storage goes away.
@@ -156,6 +167,8 @@ struct LinkedList[
     fn __copyinit__(mut self, read other: Self):
         """Initialize this list as a copy of another list.
 
+        Time Complexity: O(n) in len(elements)
+
         Args:
             other: The list to copy from.
         """
@@ -164,18 +177,24 @@ struct LinkedList[
     fn __moveinit__(mut self, owned other: Self):
         """Initialize this list by moving elements from another list.
 
+        Time Complexity: O(1)
+
         Args:
             other: The list to move elements from.
         """
         self._head = other._head
         self._tail = other._tail
         self._size = other._size
-        other._head = __type_of(other._head)()
-        other._tail = __type_of(other._tail)()
+        other._head = Self._NodePointer()
+        other._tail = Self._NodePointer()
         other._size = 0
 
     fn __del__(owned self):
-        """Clean up the list by freeing all nodes."""
+        """
+        Clean up the list by freeing all nodes.
+
+        Time Complexity: O(n) in len(self)
+        """
         var curr = self._head
         while curr:
             var next = curr[].next
@@ -184,16 +203,21 @@ struct LinkedList[
             curr = next
 
     fn append(mut self, owned value: ElementType):
-        """Add an element to the end of the list.
+        """
+        Add an element to the end of the list.
+
+        Time Complexity: O(1)
 
         Args:
             value: The value to append.
         """
-        var addr = Self.NodePointer.alloc(1)
+        var addr = Self._NodePointer.alloc(1)
+        if not addr:
+            abort("Out of memory")
         var value_ptr = UnsafePointer.address_of(addr[].value)
         value_ptr.init_pointee_move(value^)
         addr[].prev = self._tail
-        addr[].next = Self.NodePointer()
+        addr[].next = Self._NodePointer()
         if self._tail:
             self._tail[].next = addr
         else:
@@ -202,13 +226,18 @@ struct LinkedList[
         self._size += 1
 
     fn prepend(mut self, owned value: ElementType):
-        """Add an element to the beginning of the list.
+        """
+        Add an element to the beginning of the list.
+
+        Time Complexity: O(1)
 
         Args:
             value: The value to prepend.
         """
         var node = Node(value^, None, self._head)
-        var addr = UnsafePointer[__type_of(node)].alloc(1)
+        var addr = Self._NodePointer.alloc(1)
+        if not addr:
+            abort("Out of memory")
         addr.init_pointee_move(node)
         if self:
             self._head[].prev = addr
@@ -218,8 +247,12 @@ struct LinkedList[
         self._size += 1
 
     fn reverse(mut self):
-        """Reverse the order of elements in the list."""
-        var prev = __type_of(self._head)()
+        """
+        Reverse the order of elements in the list.
+
+        Time Complexity: O(n) in len(self)
+        """
+        var prev = Self._NodePointer()
         var curr = self._head
         while curr:
             var next = curr[].next
@@ -232,6 +265,8 @@ struct LinkedList[
     fn pop(mut self) raises -> ElementType:
         """Remove and return the last element of the list.
 
+        Time Complexity: O(1)
+
         Returns:
             The last element in the list.
         """
@@ -243,9 +278,9 @@ struct LinkedList[
         self._tail = elem[].prev
         self._size -= 1
         if self._size == 0:
-            self._head = __type_of(self._head)()
+            self._head = Self._NodePointer()
         else:
-            self._tail[].next = Self.NodePointer()
+            self._tail[].next = Self._NodePointer()
         elem.free()
         return value^
 
@@ -253,6 +288,8 @@ struct LinkedList[
         """
         Remove the ith element of the list, counting from the tail if
         given a negative index.
+
+        Time Complexity: O(1)
 
         Parameters:
             I: The type of index to use.
@@ -265,9 +302,7 @@ struct LinkedList[
         """
         var current = self._get_node_ptr(Int(i))
 
-        if not current:
-            raise "Invalid index for pop"
-        else:
+        if current:
             var node = current[]
             if node.prev:
                 node.prev[].next = node.next
@@ -288,8 +323,13 @@ struct LinkedList[
             self._size -= 1
             return data^
 
+        raise String("Invalid index for pop: {}").format(Int(i))
+
     fn pop_if_present(mut self) -> Optional[ElementType]:
-        """Removes the head of the list and returns it, if it exists.
+        """
+        Removes the head of the list and returns it, if it exists.
+
+        Time Complexity: O(1)
 
         Returns:
             The head of the list, if it was present.
@@ -301,9 +341,9 @@ struct LinkedList[
         self._tail = elem[].prev
         self._size -= 1
         if self._size == 0:
-            self._head = __type_of(self._head)()
+            self._head = Self._NodePointer()
         else:
-            self._tail[].next = Self.NodePointer()
+            self._tail[].next = Self._NodePointer()
         elem.free()
         return value^
 
@@ -313,6 +353,8 @@ struct LinkedList[
         """
         Remove the ith element of the list, counting from the tail if
         given a negative index.
+
+        Time Complexity: O(1)
 
         Parameters:
             I: The type of index to use.
@@ -349,7 +391,11 @@ struct LinkedList[
             return Optional[ElementType](data^)
 
     fn clear(mut self):
-        """Removes all elements from the list."""
+        """
+        Removes all elements from the list.
+
+        Time Complexity: O(n) in len(self)
+        """
         var current = self._head
         while current:
             var old = current
@@ -357,12 +403,14 @@ struct LinkedList[
             old.destroy_pointee()
             old.free()
 
-        self._head = Self.NodePointer()
-        self._tail = Self.NodePointer()
+        self._head = Self._NodePointer()
+        self._tail = Self._NodePointer()
         self._size = 0
 
     fn copy(self) -> Self:
         """Create a deep copy of the list.
+
+        Time Complexity: O(n) in len(self)
 
         Returns:
             A new list containing copies of all elements.
@@ -378,18 +426,25 @@ struct LinkedList[
         """
         Insert an element `elem` into the list at index `idx`.
 
+        Time Complexity: O(1)
+
+        Raises:
+            When given an out of bounds index.
+
         Args:
-            idx: The index to insert `elem` at.
+            idx: The index to insert `elem` at. `-len(self) <= idx <= len(self)`.
             elem: The item to insert into the list.
         """
         var i = max(0, index(idx) if idx >= 0 else index(idx) + len(self))
 
         if i == 0:
-            var node = Self.NodePointer.alloc(1)
+            var node = Self._NodePointer.alloc(1)
             if not node:
-                raise "OOM"
+                abort("Out of memory")
             node.init_pointee_move(
-                Node[ElementType](elem^, Self.NodePointer(), Self.NodePointer())
+                Node[ElementType](
+                    elem^, Self._NodePointer(), Self._NodePointer()
+                )
             )
 
             if self._head:
@@ -409,9 +464,9 @@ struct LinkedList[
         var current = self._get_node_ptr(i)
         if current:
             var next = current[].next
-            var node = Self.NodePointer.alloc(1)
+            var node = Self._NodePointer.alloc(1)
             if not node:
-                raise "OOM"
+                abort("Out of memory")
             var data = UnsafePointer.address_of(node[].value)
             data[] = elem^
             node[].next = next
@@ -419,18 +474,19 @@ struct LinkedList[
             if next:
                 next[].prev = node
             current[].next = node
-            if node[].next == Self.NodePointer():
+            if node[].next == Self._NodePointer():
                 self._tail = node
-            if node[].prev == Self.NodePointer():
+            if node[].prev == Self._NodePointer():
                 self._head = node
             self._size += 1
         else:
-            raise "index out of bounds"
+            raise String("Index {} out of bounds").format(idx)
 
     fn extend(mut self, owned other: Self):
         """
         Extends the list with another.
-        O(1) time complexity.
+
+        Time Complexity: O(1)
 
         Args:
             other: The list to append to this one.
@@ -448,14 +504,16 @@ struct LinkedList[
             self._tail = other._tail
             self._size = other._size
 
-        other._head = Self.NodePointer()
-        other._tail = Self.NodePointer()
+        other._head = Self._NodePointer()
+        other._tail = Self._NodePointer()
 
     fn count[
         ElementType: EqualityComparableCollectionElement
     ](self: LinkedList[ElementType], read elem: ElementType) -> UInt:
         """
         Count the occurrences of `elem` in the list.
+
+        Time Complexity: O(n) in len(self) compares
 
         Parameters:
             ElementType: The list element type, used to conditionally enable the function.
@@ -482,6 +540,8 @@ struct LinkedList[
         """
         Checks if the list contains `value`.
 
+        Time Complexity: O(n) in len(self) compares
+
         Parameters:
             ElementType: The list element type, used to conditionally enable the function.
 
@@ -506,6 +566,8 @@ struct LinkedList[
     ) -> Bool:
         """
         Checks if the two lists are equal.
+
+        Time Complexity: O(n) in min(len(self), len(other)) compares
 
         Parameters:
             ElementType: The list element type, used to conditionally enable the function.
@@ -537,6 +599,8 @@ struct LinkedList[
         """
         Checks if the two lists are not equal.
 
+        Time Complexity: O(n) in min(len(self), len(other)) compares
+
         Parameters:
             ElementType: The list element type, used to conditionally enable the function.
 
@@ -549,10 +613,13 @@ struct LinkedList[
         return not (self == other)
 
     fn _get_node_ptr(ref self, index: Int) -> UnsafePointer[Node[ElementType]]:
-        """Get a pointer to the node at the specified index.
+        """
+        Get a pointer to the node at the specified index.
 
         This method optimizes traversal by starting from either the head or tail
         depending on which is closer to the target index.
+
+        Time Complexity: O(n) in len(self)
 
         Args:
             index: The index of the node to get.
@@ -576,7 +643,10 @@ struct LinkedList[
             return curr
 
     fn __getitem__(ref self, index: Int) -> ref [self] ElementType:
-        """Get the element at the specified index.
+        """
+        Get the element at the specified index.
+
+        Time Complexity: O(n) in len(self)
 
         Args:
             index: The index of the element to get.
@@ -588,7 +658,10 @@ struct LinkedList[
         return self._get_node_ptr(index)[].value
 
     fn __setitem__(mut self, index: Int, owned value: ElementType):
-        """Set the element at the specified index.
+        """
+        Set the element at the specified index.
+
+        Time Complexity: O(n) in len(self)
 
         Args:
             index: The index of the element to set.
@@ -600,6 +673,8 @@ struct LinkedList[
     fn __len__(self) -> Int:
         """Get the number of elements in the list.
 
+        Time Complexity: O(1)
+
         Returns:
             The number of elements in the list.
         """
@@ -607,6 +682,8 @@ struct LinkedList[
 
     fn __bool__(self) -> Bool:
         """Check if the list is non-empty.
+
+        Time Complexity: O(1)
 
         Returns:
             True if the list has elements, False otherwise.
@@ -617,6 +694,8 @@ struct LinkedList[
         ElementType: WritableCollectionElement
     ](self: LinkedList[ElementType]) -> String:
         """Convert the list to its string representation.
+
+        Time Complexity: O(n) in len(self)
 
         Parameters:
             ElementType: Used to conditionally enable this function when
@@ -634,6 +713,8 @@ struct LinkedList[
     ](self: LinkedList[ElementType]) -> String:
         """Convert the list to its string representation.
 
+        Time Complexity: O(n) in len(self)
+
         Parameters:
             ElementType: Used to conditionally enable this function when
              `ElementType` is `Writable`.
@@ -649,6 +730,8 @@ struct LinkedList[
         W: Writer, ElementType: WritableCollectionElement
     ](self: LinkedList[ElementType], mut writer: W):
         """Write the list to the given writer.
+
+        Time Complexity: O(n) in len(self)
 
         Parameters:
             W: The type of writer to write the list to.

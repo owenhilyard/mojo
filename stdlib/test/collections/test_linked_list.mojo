@@ -14,7 +14,13 @@
 
 from collections import LinkedList, Optional
 from testing import assert_equal, assert_raises, assert_true, assert_false
-from test_utils import CopyCounter, MoveCounter
+from test_utils import (
+    CopyCounter,
+    MoveCounter,
+    DtorCounter,
+    g_dtor_count,
+    CopyCountedStruct,
+)
 
 
 def test_construction():
@@ -175,7 +181,7 @@ def test_list_pop():
 
     # try popping from index 3 for 3 times
     for i in range(3, 6):
-        assert_equal[Int](i, list.pop(3))
+        assert_equal(i, list.pop(3))
 
     # list should have 3 elements now
     assert_equal(3, len(list))
@@ -303,8 +309,6 @@ def test_list_insert():
     assert_equal(v1[1], 2)
     assert_equal(v1[2], 3)
 
-    print(v1.__str__())
-
     #
     # Test the list [1, 2, 3, 4, 5] created with negative and positive index
     #
@@ -315,7 +319,6 @@ def test_list_insert():
     v2.insert(len(v2), 5)
     v2.insert(-1, 4)
     v2.insert(-len(v2), 1)
-    print(v2.__str__())
 
     assert_equal(len(v2), 5)
     assert_equal(v2[0], 1)
@@ -358,9 +361,6 @@ def test_list_extend_non_trivial():
     #   - extend() for non-plain-old-data types
     #   - extend() with mixed-length self and other lists
     #   - extend() using optimal number of __moveinit__() calls
-
-    # Preallocate with enough capacity to avoid reallocation making the
-    # move count checks below flaky.
     var v1 = LinkedList[MoveCounter[String]]()
     v1.append(MoveCounter[String]("Hello"))
     v1.append(MoveCounter[String]("World"))
@@ -428,21 +428,6 @@ def test_list_explicit_copy():
     assert_equal(len(l2), len(l2_copy))
     for i in range(len(l2)):
         assert_equal(l2[i], l2_copy[i])
-
-
-@value
-struct CopyCountedStruct(CollectionElement):
-    var counter: CopyCounter
-    var value: String
-
-    fn __init__(out self, *, other: Self):
-        self.counter = other.counter.copy()
-        self.value = other.value.copy()
-
-    @implicit
-    fn __init__(out self, value: String):
-        self.counter = CopyCounter()
-        self.value = value
 
 
 def test_no_extra_copies_with_sugared_set_by_field():
@@ -534,33 +519,6 @@ def test_indexing():
 # ===-------------------------------------------------------------------===#
 # LinkedList dtor tests
 # ===-------------------------------------------------------------------===#
-var g_dtor_count: Int = 0
-
-
-struct DtorCounter(CollectionElement, Writable):
-    # NOTE: payload is required because LinkedList does not support zero sized structs.
-    var payload: Int
-
-    fn __init__(out self):
-        self.payload = 0
-
-    fn __init__(out self, *, other: Self):
-        self.payload = other.payload
-
-    fn __copyinit__(out self, existing: Self, /):
-        self.payload = existing.payload
-
-    fn __moveinit__(out self, owned existing: Self, /):
-        self.payload = existing.payload
-        existing.payload = 0
-
-    fn __del__(owned self):
-        g_dtor_count += 1
-
-    fn write_to[W: Writer](self, mut writer: W):
-        writer.write("DtorCounter(")
-        writer.write(String(g_dtor_count))
-        writer.write(")")
 
 
 def inner_test_list_dtor():
