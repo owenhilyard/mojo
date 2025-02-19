@@ -482,7 +482,7 @@ locations other than the head atomically and safely, with a flag set for
 thread-safe tasks, or if threads keep small local queues and any overflow is
 placed in a global queue that is fetched from when no local work may be done.
 
-I personally thing this is the best approach, mostly because of experience with
+I personally think this is the best approach, mostly because of experience with
 thread per core Rust async executors such as Glommio, which remove most of the
 complaints I commonly see about Rust async requiring tons of `Arc<Mutex<T>>`. We
 can work with authors of frameworks which will do a lot of IO, such as Lightbug,
@@ -630,10 +630,10 @@ complexity over Go's "make everything async" approach. However, what I like to
 call "the paint bucket approach to function coloring", has some downsides. You
 end up hiding a lot of things from the developer, and I think that there are a
 lot of places where no distinction is made between "accidental complexity" and
-"inherit complexity". Accidental complexity is when something is made more
+"inherent complexity". Accidental complexity is when something is made more
 complicated than necessary (See
 [INTERCAL](https://en.wikipedia.org/wiki/INTERCAL)). It should be avoided where
-possible. Inherit complexity is for problems which are actually just hard, like
+possible. inherent complexity is for problems which are actually just hard, like
 "any allocation can fail", concurrency, parallelism, register allocation, and
 byzantine fault tolerance. Async in systems languages hits 3 of those hard
 problems. The danger of inherent complexity, alongside the simple difficulty of
@@ -647,9 +647,9 @@ really have a good way to handle OOM. Python also decided to use a global mutex
 to make some problems easier, and they are now trying to dig themselves out of
 that hole. When you try to reduce inherent complexity, you make important
 decisions on the user. I'm fully in support of "I don't care about that" APIs,
-but I think that Mojo, in it's aim to be a high performance language, needs to
+but I think that Mojo, in its aim to be a high performance language, needs to
 start with the zero overhead principle. To me, "don't pay for what you don't
-use" and "could't have written it better yourself" mean that we should offer a
+use" and "couldn't have written it better yourself" mean that we should offer a
 very low level API with tons and tons of options, and then other APIs built on
 that for common use-cases with the options pre-configured. To me, this is that
 low level API for coroutines. All of the complexity is shown to you, you can
