@@ -1,3 +1,4 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel:api.bzl", "mojo_library", "pkg_files")
 
 package(default_visibility = ["//visibility:public"])
@@ -7,6 +8,11 @@ exports_files(["__init__.mojo"])
 filegroup(
     name = "stdlib_srcs",
     srcs = glob(["**/*.mojo"]),
+)
+
+cc_library(
+    name = "mojo_stdlib_cpuid",
+    srcs = ["sys/cpu/amd64/cpuid.c"],
 )
 
 mojo_library(
