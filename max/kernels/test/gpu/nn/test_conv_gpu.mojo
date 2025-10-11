@@ -17,7 +17,12 @@ from random import rand
 from buffer import NDBuffer
 from buffer.dimlist import DimList
 from gpu.host import DeviceContext
-from nn.conv import Naive2dConvolution, conv3d_gpu_naive_ndhwc_qrscf
+from nn.conv import (
+    Naive2dConvolution,
+    conv3d_gpu_naive,
+    Conv3DImageLayout,
+    Conv3DFilterLayout,
+)
 from testing import assert_almost_equal
 
 from utils.index import Index, IndexList
@@ -59,6 +64,8 @@ fn test_conv3d_gpu[
     ) // stride[2] + 1
 
     alias output_dim = DimList(N, D_out, H_out, W_out, F)
+
+    print("Output Dim: {}", output_dim)
 
     # calculate flattened sizes, gotta know how much memory we need
     var input_size = input_dim.product().get()
@@ -118,7 +125,7 @@ fn test_conv3d_gpu[
     var grid_dim_y = ceildiv(D_out, block_size)  # depth is the y dimension
     var grid_dim_z = N  # batch size is the z dimension
 
-    alias kernel = conv3d_gpu_naive_ndhwc_qrscf[
+    alias kernel = conv3d_gpu_naive[
         input_dim,
         filter_dim,
         output_dim,
@@ -126,6 +133,9 @@ fn test_conv3d_gpu[
         dtype,
         dtype,
         block_size,
+        Conv3DImageLayout.NDHWC,
+        Conv3DFilterLayout.QRSCF,
+        Conv3DImageLayout.NDHWC,
         None,
     ]
 

@@ -13,9 +13,10 @@
 
 
 from buffer.dimlist import DimList
+from buffer.buffer import NDBuffer
 from gpu.host import DeviceContext
 from internal_utils import DeviceNDBuffer, HostNDBuffer, random, zero
-from nn.conv import conv_cudnn, conv_gpu
+from nn.conv import conv_cudnn, conv_gpu, Conv2DFilterLayout, Conv2DImageLayout
 from testing import assert_almost_equal
 
 from utils.index import IndexList
@@ -116,10 +117,34 @@ fn test_conv_cudnn[
         input_type,
         filter_type,
         output_type,
+        Conv2DImageLayout.NHWC,
+        Conv2DFilterLayout.RSCF,
+        Conv2DImageLayout.NHWC,
     ](
-        input_dev.tensor,
-        filter_dev.tensor,
-        output_ref_dev.tensor,
+        rebind[
+            NDBuffer[
+                input_type,
+                Conv2DImageLayout.NHWC.rank(),
+                MutableAnyOrigin,
+                input_dim,
+            ]
+        ](input_dev.tensor),
+        rebind[
+            NDBuffer[
+                filter_type,
+                Conv2DFilterLayout.RSCF.rank(),
+                MutableAnyOrigin,
+                filter_dim,
+            ]
+        ](filter_dev.tensor),
+        rebind[
+            NDBuffer[
+                output_type,
+                Conv2DImageLayout.NHWC.rank(),
+                MutableAnyOrigin,
+                output_dim,
+            ]
+        ](output_ref_dev.tensor),
         stride_dim,
         dilation_dim,
         pad_dim,

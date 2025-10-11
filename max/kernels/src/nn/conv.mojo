@@ -16,6 +16,7 @@ from math import align_down, ceildiv
 from os import abort
 from sys.ffi import _get_global_or_null, external_call
 from sys.info import align_of, simd_width_of
+from utils import Variant
 
 from _cudnn.cnn_infer import (
     cudnnConvolutionForward,
@@ -90,6 +91,7 @@ from .conv_utils import (
     reorder_padding,
 )
 from .shapes import get_sliding_window_out_dim
+from .image import Image2DLayout
 
 
 @fieldwise_init
@@ -3034,7 +3036,382 @@ fn conv_nhwc_direct[
 # ===----------------------------------------------------------------------=== #
 
 
-fn conv2d_gpu_naive_nhwc_rscf[
+trait ConvImageLayout(EqualityComparable):
+    fn __init__(out self):
+        self = Self(0)
+
+    fn __init__(out self, var value: UInt):
+        ...
+
+    @always_inline("nodebug")
+    fn n_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn h_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn w_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn c_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn try_downcast_2d(self) -> Optional[Conv2DImageLayout]:
+        ...
+
+    @always_inline("nodebug")
+    fn try_downcast_3d(self) -> Optional[Conv3DImageLayout]:
+        ...
+
+    @always_inline("nodebug")
+    fn is_2d(self) -> Bool:
+        ...
+
+    @always_inline("nodebug")
+    fn is_3d(self) -> Bool:
+        ...
+
+    @always_inline("nodebug")
+    fn rank(self) -> UInt:
+        ...
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct Conv2DImageLayout(
+    ConvImageLayout, EqualityComparable, ImplicitlyCopyable, Movable
+):
+    var value: UInt
+    alias NHWC = Self(0)  # channels last layout.
+    alias NCHW = Self(1)  # channels first layout
+
+    @always_inline("nodebug")
+    fn __eq__(self, rhs: Self) -> Bool:
+        return self.value == rhs.value
+
+    @always_inline("nodebug")
+    fn __ne__(self, rhs: Self) -> Bool:
+        return self.value != rhs.value
+
+    @always_inline("nodebug")
+    fn n_index(self) -> UInt:
+        return [0, 0, -1][self.value]
+
+    @always_inline("nodebug")
+    fn h_index(self) -> UInt:
+        return [1, 3, -1][self.value]
+
+    @always_inline("nodebug")
+    fn w_index(self) -> UInt:
+        return [2, 1, -1][self.value]
+
+    @always_inline("nodebug")
+    fn c_index(self) -> UInt:
+        return [3, 2, -1][self.value]
+
+    @always_inline("nodebug")
+    fn try_downcast_2d(self) -> Optional[Conv2DImageLayout]:
+        return self
+
+    @always_inline("nodebug")
+    fn try_downcast_3d(self) -> Optional[Conv3DImageLayout]:
+        return None
+
+    @always_inline("nodebug")
+    fn nhwc_index_to_indexlist(
+        self,
+        var n: UInt,
+        var h: UInt,
+        var w: UInt,
+        var c: UInt,
+        out index: IndexList[4],
+    ):
+        index = IndexList[4]()
+        index[self.n_index()] = n
+        index[self.h_index()] = h
+        index[self.w_index()] = w
+        index[self.c_index()] = c
+
+    @always_inline("nodebug")
+    fn is_2d(self) -> Bool:
+        return True
+
+    @always_inline("nodebug")
+    fn is_3d(self) -> Bool:
+        return False
+
+    @always_inline("nodebug")
+    fn rank(self) -> UInt:
+        return 2
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct Conv3DImageLayout(
+    ConvImageLayout, EqualityComparable, ImplicitlyCopyable, Movable
+):
+    var value: UInt
+    alias NDHWC = Self(0)  # channels last + 3d
+
+    @always_inline("nodebug")
+    fn __eq__(self, rhs: Self) -> Bool:
+        return self.value == rhs.value
+
+    @always_inline("nodebug")
+    fn __ne__(self, rhs: Self) -> Bool:
+        return self.value != rhs.value
+
+    @always_inline("nodebug")
+    fn n_index(self) -> UInt:
+        return [0][self.value]
+
+    @always_inline("nodebug")
+    fn d_index(self) -> UInt:
+        return [1][self.value]
+
+    @always_inline("nodebug")
+    fn h_index(self) -> UInt:
+        return [2][self.value]
+
+    @always_inline("nodebug")
+    fn w_index(self) -> UInt:
+        return [3][self.value]
+
+    @always_inline("nodebug")
+    fn c_index(self) -> UInt:
+        return [4][self.value]
+
+    @always_inline("nodebug")
+    fn ndhwc_index_to_indexlist(
+        self,
+        var n: UInt,
+        var d: UInt,
+        var h: UInt,
+        var w: UInt,
+        var c: UInt,
+        out index: IndexList[5],
+    ):
+        index = IndexList[5]()
+        index[self.n_index()] = n
+        index[self.d_index()] = d
+        index[self.h_index()] = h
+        index[self.w_index()] = w
+        index[self.c_index()] = c
+
+    @always_inline("nodebug")
+    fn try_downcast_2d(self) -> Optional[Conv2DImageLayout]:
+        return None
+
+    @always_inline("nodebug")
+    fn try_downcast_3d(self) -> Optional[Conv3DImageLayout]:
+        return self
+
+    @always_inline("nodebug")
+    fn is_2d(self) -> Bool:
+        return False
+
+    @always_inline("nodebug")
+    fn is_3d(self) -> Bool:
+        return True
+
+    @always_inline("nodebug")
+    fn rank(self) -> UInt:
+        return 3
+
+
+trait ConvFilterLayout(EqualityComparable):
+    fn __init__(out self):
+        self = Self(0)
+
+    fn __init__(out self, var value: UInt):
+        ...
+
+    @always_inline("nodebug")
+    fn r_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn s_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn c_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn f_index(self) -> UInt:
+        ...
+
+    @always_inline("nodebug")
+    fn try_downcast_2d(self) -> Optional[Conv2DFilterLayout]:
+        ...
+
+    @always_inline("nodebug")
+    fn try_downcast_3d(self) -> Optional[Conv3DFilterLayout]:
+        ...
+
+    @always_inline("nodebug")
+    fn is_2d(self) -> Bool:
+        ...
+
+    @always_inline("nodebug")
+    fn is_3d(self) -> Bool:
+        ...
+
+    @always_inline("nodebug")
+    fn rank(self) -> UInt:
+        ...
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct Conv2DFilterLayout(
+    ConvFilterLayout, EqualityComparable, ImplicitlyCopyable, Movable
+):
+    var value: UInt
+    alias RSCF = Self(0)
+    alias FCRS = Self(1)
+
+    @always_inline("nodebug")
+    fn __eq__(self, rhs: Self) -> Bool:
+        return self.value == rhs.value
+
+    @always_inline("nodebug")
+    fn __ne__(self, rhs: Self) -> Bool:
+        return self.value != rhs.value
+
+    @always_inline("nodebug")
+    fn r_index(self) -> UInt:
+        return [0, 2][self.value]
+
+    @always_inline("nodebug")
+    fn s_index(self) -> UInt:
+        return [1, 3][self.value]
+
+    @always_inline("nodebug")
+    fn c_index(self) -> UInt:
+        return [2, 1][self.value]
+
+    @always_inline("nodebug")
+    fn f_index(self) -> UInt:
+        return [3, 0][self.value]
+
+    @always_inline("nodebug")
+    fn rscf_index_to_indexlist(
+        self,
+        var r: Int,
+        var s: Int,
+        var c: Int,
+        var f: Int,
+        out index: IndexList[4],
+    ):
+        index = IndexList[4]()
+        index[self.r_index()] = r
+        index[self.s_index()] = s
+        index[self.c_index()] = c
+        index[self.f_index()] = f
+
+    @always_inline("nodebug")
+    fn try_downcast_2d(self) -> Optional[Conv2DFilterLayout]:
+        return self
+
+    @always_inline("nodebug")
+    fn try_downcast_3d(self) -> Optional[Conv3DFilterLayout]:
+        return None
+
+    @always_inline("nodebug")
+    fn is_2d(self) -> Bool:
+        return True
+
+    @always_inline("nodebug")
+    fn is_3d(self) -> Bool:
+        return False
+
+    @always_inline("nodebug")
+    fn rank(self) -> UInt:
+        return 2
+
+
+@fieldwise_init
+@register_passable("trivial")
+struct Conv3DFilterLayout(
+    ConvFilterLayout, EqualityComparable, ImplicitlyCopyable, Movable
+):
+    var value: UInt
+    alias QRSCF = Self(0)
+
+    @always_inline("nodebug")
+    fn __eq__(self, rhs: Self) -> Bool:
+        return self.value == rhs.value
+
+    @always_inline("nodebug")
+    fn __ne__(self, rhs: Self) -> Bool:
+        return self.value != rhs.value
+
+    @always_inline("nodebug")
+    fn q_index(self) -> UInt:
+        return [0][self.value]
+
+    @always_inline("nodebug")
+    fn r_index(self) -> UInt:
+        return [1][self.value]
+
+    @always_inline("nodebug")
+    fn s_index(self) -> UInt:
+        return [2][self.value]
+
+    @always_inline("nodebug")
+    fn c_index(self) -> UInt:
+        return [3][self.value]
+
+    @always_inline("nodebug")
+    fn f_index(self) -> UInt:
+        return [4][self.value]
+
+    @always_inline("nodebug")
+    fn qrscf_index_to_indexlist(
+        self,
+        var q: Int,
+        var r: Int,
+        var s: Int,
+        var c: Int,
+        var f: Int,
+        out index: IndexList[5],
+    ):
+        index = IndexList[5]()
+
+        index[self.q_index()] = q
+        index[self.r_index()] = r
+        index[self.s_index()] = s
+        index[self.c_index()] = c
+        index[self.f_index()] = f
+
+    @always_inline("nodebug")
+    fn try_downcast_2d(self) -> Optional[Conv2DFilterLayout]:
+        return None
+
+    @always_inline("nodebug")
+    fn try_downcast_3d(self) -> Optional[Conv3DFilterLayout]:
+        return self
+
+    @always_inline("nodebug")
+    fn is_2d(self) -> Bool:
+        return False
+
+    @always_inline("nodebug")
+    fn is_3d(self) -> Bool:
+        return True
+
+    @always_inline("nodebug")
+    fn rank(self) -> UInt:
+        return 3
+
+
+fn conv2d_gpu_naive[
     input_dim: DimList,
     filter_dim: DimList,
     output_dim: DimList,
@@ -3042,6 +3419,9 @@ fn conv2d_gpu_naive_nhwc_rscf[
     filter_type: DType,
     output_type: DType,
     block_size: Int,
+    input_layout: Conv2DImageLayout,
+    filter_layout: Conv2DFilterLayout,
+    output_layout: Conv2DImageLayout,
     maybe_epilogue_func: OptionalReg[elementwise_simd_epilogue_type],
 ](
     input: NDBuffer[input_type, 4, MutableAnyOrigin, input_dim],
@@ -3051,21 +3431,30 @@ fn conv2d_gpu_naive_nhwc_rscf[
     dilation: IndexList[2],
     padding: IndexList[2],
 ):
-    var N = input.dim[0]()
-    var H = input.dim[1]()
-    var W = input.dim[2]()
-    var C_in = input.dim[3]()  # channel_in
-    var R = filter.dim[0]()
-    var S = filter.dim[1]()
-    var H_out = output.dim[1]()
-    var W_out = output.dim[2]()
-    var C_out = output.dim[3]()  # channel_out or #F
+    alias N = input_dim.get[input_layout.n_index()]()
+    alias H_in = input_dim.get[input_layout.h_index()]()
+    alias W_in = input_dim.get[input_layout.w_index()]()
+    alias C_in = input_dim.get[input_layout.c_index()]()  # channel_in
+    alias R = filter_dim.get[filter_layout.r_index()]()
+    alias S = filter_dim.get[filter_layout.s_index()]()
+    alias H_out = output_dim.get[output_layout.h_index()]()
+    alias W_out = output_dim.get[output_layout.w_index()]()
+    alias C_out = output_dim.get[output_layout.c_index()]()  # channel_out or #F
     var pad_h = padding[0]
     var pad_w = padding[1]
     var stride_h = stride[0]
     var stride_w = stride[1]
     var dil_h = dilation[0]
     var dil_w = dilation[1]
+
+    constrained[
+        C_in == filter_dim.get[filter_layout.c_index()](),
+        "Invalid filter channel count.",
+    ]()
+    constrained[
+        C_out == filter_dim.get[filter_layout.f_index()](),
+        "Invalid filter channel count.",
+    ]()
 
     var n = block_idx.z
     var h = block_idx.y * block_dim.y + thread_idx.y
@@ -3081,23 +3470,33 @@ fn conv2d_gpu_naive_nhwc_rscf[
             for s in range(S):
                 var h_in = h * stride_h - pad_h + r * dil_h
                 var w_in = w * stride_w - pad_w + s * dil_w
-                if 0 <= h_in < H and 0 <= w_in < W:
+                if 0 <= h_in < H_in and 0 <= w_in < W_in:
                     for ci in range(C_in):
                         value += (
-                            input.load(IndexList[4](n, h_in, w_in, ci)).cast[
-                                accum_type
-                            ]()
-                            * filter.load(IndexList[4](r, s, ci, co)).cast[
-                                accum_type
-                            ]()
+                            input.load(
+                                input_layout.nhwc_index_to_indexlist(
+                                    n, h_in, w_in, ci
+                                )
+                            ).cast[accum_type]()
+                            * filter.load(
+                                filter_layout.rscf_index_to_indexlist(
+                                    r, s, ci, co
+                                )
+                            ).cast[accum_type]()
                         )
 
         @parameter
         if maybe_epilogue_func:
             alias epilogue_func = maybe_epilogue_func.value()
-            epilogue_func(IndexList[4](n, h, w, co), value.cast[output_type]())
+            epilogue_func(
+                output_layout.nhwc_index_to_indexlist(n, h, w, co),
+                value.cast[output_type](),
+            )
         else:
-            output.store(IndexList[4](n, h, w, co), value.cast[output_type]())
+            output.store(
+                output_layout.nhwc_index_to_indexlist(n, h, w, co),
+                value.cast[output_type](),
+            )
 
 
 # ===----------------------------------------------------------------------=== #
@@ -3340,125 +3739,88 @@ fn conv_gpu[
     input_type: DType,
     filter_type: DType,
     output_type: DType,
+    input_layout: Some[ConvImageLayout],
+    filter_layout: Some[ConvFilterLayout],
+    output_layout: Some[ConvImageLayout],
     maybe_epilogue_func: OptionalReg[elementwise_simd_epilogue_type] = None,
-    filter_is_fcrs: Bool = False,
 ](
-    input: NDBuffer[input_type, input_rank, MutableAnyOrigin, input_dim],
-    filter: NDBuffer[filter_type, filter_rank, MutableAnyOrigin, filter_dim],
-    output: NDBuffer[
-        mut=True, output_type, input_rank, MutableAnyOrigin, output_dim
+    input: NDBuffer[
+        input_type, input_layout.rank(), MutableAnyOrigin, input_dim
     ],
-    stride: IndexList[input_rank - 2],
-    dilation: IndexList[input_rank - 2],
-    padding: IndexList[input_rank - 2],
+    filter: NDBuffer[
+        filter_type, filter_layout.rank(), MutableAnyOrigin, filter_dim
+    ],
+    output: NDBuffer[
+        mut=True, output_type, input_layout.rank(), MutableAnyOrigin, output_dim
+    ],
+    stride: IndexList[input_layout.rank() - 2],
+    dilation: IndexList[input_layout.rank() - 2],
+    padding: IndexList[input_layout.rank() - 2],
     num_groups: Int,
     ctx: DeviceContext,
 ) raises:
     alias block_size = 16
 
-    alias conv_gpu_n = conv2d_gpu_naive_nhwc_rscf[
-        input_dim,
-        filter_dim,
-        output_dim,
-        input_type,
-        filter_type,
-        output_type,
-        block_size,
-        maybe_epilogue_func,
-    ]
-
-    alias conv_gpu_3d = conv3d_gpu_naive_ndhwc_qrscf[
-        input_dim,
-        filter_dim,
-        output_dim,
-        input_type,
-        filter_type,
-        output_type,
-        block_size,
-        maybe_epilogue_func,
-    ]
     var grid_dim_y = ceildiv(
-        output.dim[1](), block_size
+        output.dim[
+            output_layout.h_index() if output_layout.is_2d() else output_layout.try_downcast_3d()
+            .value()
+            .d_index()
+        ](),
+        block_size,
     )  # height for 2d and depth for 3d
-    var grid_dim_z = input.dim[0]()  # n for both
+    var grid_dim_z = input.dim[input_layout.n_index()]()  # n for both
 
     @parameter
-    if input_rank == 4:
+    if input_layout.is_2d() and filter_layout.is_2d() and output_layout.is_2d():
+        alias conv_gpu_n = conv2d_gpu_naive[
+            input_dim,
+            filter_dim,
+            output_dim,
+            input_type,
+            filter_type,
+            output_type,
+            block_size,
+            input_layout.try_downcast_2d().value(),
+            filter_layout.try_downcast_2d().value(),
+            output_layout.try_downcast_2d().value(),
+            maybe_epilogue_func,
+        ]
 
-        @parameter
-        if filter_is_fcrs:
-
-            @parameter
-            if maybe_epilogue_func:
-                alias epilogue = maybe_epilogue_func.value()
-                var output_tmp_data = ctx.enqueue_create_buffer[output_type](
-                    output.num_elements()
-                )
-
-                var output_tmp = output
-                output_tmp.data = output_tmp_data.unsafe_ptr()
-
-                conv_cudnn[input_type, filter_type, output_type,](
-                    rebind[NDBuffer[input_type, 4, MutableAnyOrigin]](input),
-                    rebind[NDBuffer[filter_type, 4, MutableAnyOrigin]](filter),
-                    rebind[NDBuffer[output_type, 4, MutableAnyOrigin]](
-                        output_tmp
-                    ),
-                    rebind[IndexList[2]](stride),
-                    rebind[IndexList[2]](dilation),
-                    rebind[IndexList[2]](padding),
-                    num_groups,
-                    ctx,
-                )
-
-                @parameter
-                @__copy_capture(output_tmp)
-                @always_inline
-                fn epilogue_wrapper[
-                    _width: Int, _rank: Int, alignment: Int = 1
-                ](coords: IndexList[_rank]):
-                    alias align = align_of[SIMD[output_type, _width]]()
-                    vec = output_tmp.load[width=_width, alignment=align](
-                        rebind[IndexList[4]](coords)
-                    )
-                    epilogue(coords, vec)
-
-                elementwise[
-                    epilogue_wrapper, simd_width_of[output_type](), target="gpu"
-                ](output.dynamic_shape, ctx)
-
-                _ = output_tmp_data^
-
-            else:
-                conv_cudnn[input_type, filter_type, output_type,](
-                    rebind[NDBuffer[input_type, 4, MutableAnyOrigin]](input),
-                    rebind[NDBuffer[filter_type, 4, MutableAnyOrigin]](filter),
-                    rebind[NDBuffer[output_type, 4, MutableAnyOrigin]](output),
-                    rebind[IndexList[2]](stride),
-                    rebind[IndexList[2]](dilation),
-                    rebind[IndexList[2]](padding),
-                    num_groups,
-                    ctx,
-                )
-
-        else:
-            var grid_dim_x = ceildiv(
-                output.dim[2](), block_size
-            )  # w / block size for 2d
-            ctx.enqueue_function_checked[conv_gpu_n, conv_gpu_n](
-                input,
-                filter,
-                output,
-                stride,
-                dilation,
-                padding,
-                grid_dim=(grid_dim_x, grid_dim_y, grid_dim_z),
-                block_dim=(block_size, block_size),
-            )
-
-    elif input_rank == 5:
         var grid_dim_x = ceildiv(
-            output.dim[2]() * output.dim[3](), block_size
+            output.dim[output_layout.w_index()](), block_size
+        )  # w / block size for 2d
+        ctx.enqueue_function_checked[conv_gpu_n, conv_gpu_n](
+            input,
+            filter,
+            output,
+            stride,
+            dilation,
+            padding,
+            grid_dim=(grid_dim_x, grid_dim_y, grid_dim_z),
+            block_dim=(block_size, block_size),
+        )
+    elif (
+        input_layout.is_3d() and filter_layout.is_3d() and output_layout.is_3d()
+    ):
+        alias conv_gpu_3d = conv3d_gpu_naive[
+            input_dim,
+            filter_dim,
+            output_dim,
+            input_type,
+            filter_type,
+            output_type,
+            block_size,
+            input_layout.try_downcast_3d().value(),
+            filter_layout.try_downcast_3d().value(),
+            output_layout.try_downcast_3d().value(),
+            maybe_epilogue_func,
+        ]
+
+        var grid_dim_x = ceildiv(
+            output.dim[output_layout.h_index()]()
+            * output.dim[output_layout.w_index()](),
+            block_size,
         )  # h * w / block size for 3d
         ctx.enqueue_function_checked[conv_gpu_3d, conv_gpu_3d](
             input,
@@ -3470,9 +3832,11 @@ fn conv_gpu[
             grid_dim=(grid_dim_x, grid_dim_y, grid_dim_z),
             block_dim=(block_size, block_size),
         )
+    else:
+        constrained[False, "All layouts must be the same rank."]()
 
 
-fn conv3d_gpu_naive_ndhwc_qrscf[
+fn conv3d_gpu_naive[
     input_dim: DimList,
     filter_dim: DimList,
     output_dim: DimList,
@@ -3480,6 +3844,9 @@ fn conv3d_gpu_naive_ndhwc_qrscf[
     filter_type: DType,
     output_type: DType,
     block_size: Int,
+    input_layout: Conv3DImageLayout,
+    filter_layout: Conv3DFilterLayout,
+    output_layout: Conv3DImageLayout,
     maybe_epilogue_func: OptionalReg[elementwise_simd_epilogue_type],
 ](
     input: NDBuffer[input_type, 5, MutableAnyOrigin, input_dim],
@@ -3489,20 +3856,20 @@ fn conv3d_gpu_naive_ndhwc_qrscf[
     dilation: IndexList[3],
     padding: IndexList[3],
 ):
-    var N = input.dim[0]()
-    var D = input.dim[1]()  # depth
-    var H = input.dim[2]()
-    var W = input.dim[3]()
-    var C_in = input.dim[4]()  # channel_input
+    var N = input.dim[input_layout.n_index()]()
+    var D = input.dim[input_layout.d_index()]()  # depth
+    var H = input.dim[input_layout.h_index()]()
+    var W = input.dim[input_layout.w_index()]()
+    var C_in = input.dim[input_layout.c_index()]()  # channel_input
 
-    var Q = filter.dim[0]()
-    var R = filter.dim[1]()
-    var S = filter.dim[2]()
+    var Q = filter.dim[filter_layout.q_index()]()
+    var R = filter.dim[filter_layout.r_index()]()
+    var S = filter.dim[filter_layout.s_index()]()
 
-    var D_out = output.dim[1]()  # depth
-    var H_out = output.dim[2]()
-    var W_out = output.dim[3]()
-    var C_out = output.dim[4]()  # channel_output
+    var D_out = output.dim[output_layout.d_index()]()  # depth
+    var H_out = output.dim[output_layout.h_index()]()
+    var W_out = output.dim[output_layout.w_index()]()
+    var C_out = output.dim[output_layout.c_index()]()  # channel_output
 
     var pad_d = padding[0]
     var pad_h = padding[1]
@@ -3549,14 +3916,23 @@ fn conv3d_gpu_naive_ndhwc_qrscf[
                     var w_in = Int(w_out_idx * stride_w + s * dil_w - pad_w)
 
                     # check all input bounds bro
-                    if 0 <= d_in < D and 0 <= h_in < H and 0 <= w_in < W:
+                    if (
+                        0 <= d_in < D
+                        and 0 <= h_in < H
+                        and 0 <= w_in < W
+                        and 0 <= n < N
+                    ):
                         for ci in range(C_in):
                             value += (
                                 input.load(
-                                    IndexList[5](n, d_in, h_in, w_in, ci)
+                                    input_layout.ndhwc_index_to_indexlist(
+                                        n, d_in, h_in, w_in, ci
+                                    )
                                 ).cast[accum_type]()
                                 * filter.load(
-                                    IndexList[5](q, r, s, ci, co)
+                                    filter_layout.qrscf_index_to_indexlist(
+                                        q, r, s, ci, co
+                                    )
                                 ).cast[accum_type]()
                             )
 
@@ -3564,11 +3940,15 @@ fn conv3d_gpu_naive_ndhwc_qrscf[
         if maybe_epilogue_func:
             alias epilogue_func = maybe_epilogue_func.value()
             epilogue_func(
-                IndexList[5](n, d_out_idx, h_out_idx, w_out_idx, co),
+                output_layout.ndhwc_index_to_indexlist(
+                    n, d_out_idx, h_out_idx, w_out_idx, co
+                ),
                 value.cast[output_type](),
             )
         else:
             output.store(
-                IndexList[5](n, d_out_idx, h_out_idx, w_out_idx, co),
+                output_layout.ndhwc_index_to_indexlist(
+                    n, d_out_idx, h_out_idx, w_out_idx, co
+                ),
                 value.cast[output_type](),
             )
