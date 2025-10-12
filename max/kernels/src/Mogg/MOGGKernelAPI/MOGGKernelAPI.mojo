@@ -99,7 +99,14 @@ from nn.argmaxmin_gpu import argmax_gpu, argmin_gpu
 from nn.argsort import argsort
 from nn.bicubic import resize_bicubic
 from nn.concat import _concat_cpu, concat, fused_concat
-from nn.conv import ConvInfoStatic, conv_gpu, conv_nhwc_direct, conv_shape
+from nn.conv import (
+    ConvInfoStatic,
+    conv_gpu,
+    conv_nhwc_direct,
+    conv_shape,
+    Conv2DImageLayout,
+    Conv2DFilterLayout,
+)
 from nn.conv import pack_filter as _pack_conv_filter
 from nn.conv import pack_filter_shape as pack_filter_shape_conv
 from nn.conv_transpose import (
@@ -4805,8 +4812,10 @@ struct Conv:
                     input.dtype,
                     filter.dtype,
                     output.dtype,
+                    Conv2DImageLayout.NHWC,
+                    Conv2DFilterLayout.FCRS if filter_is_fcrs else Conv2DFilterLayout.RSCF,
+                    Conv2DImageLayout.NHWC,
                     output_fn,
-                    filter_is_fcrs,
                 ](
                     input_buf,
                     filter_buf,

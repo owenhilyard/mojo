@@ -30,8 +30,9 @@ from gpu.id import block_dim, block_idx, thread_idx
 from internal_utils import DeviceNDBuffer, HostNDBuffer, random
 from layout import Layout, LayoutTensor
 from layout._ndbuffer_stub import from_ndbuffer_row_major
-from nn.conv import conv_gpu
+from nn.conv import conv_gpu, Conv2DFilterLayout, Conv2DImageLayout
 from testing import assert_almost_equal, assert_true
+
 
 from utils.index import IndexList
 from utils.numerics import get_accum_type
@@ -402,7 +403,19 @@ fn test_winograd_conv_gpu[
     var device_input = host_input.copy_to_device(ctx)
     var device_filter = host_filter.copy_to_device(ctx)
 
-    conv_gpu[4, 4, input_dim, filter_dim, output_dim, dtype, dtype, dtype](
+    conv_gpu[
+        4,
+        4,
+        input_dim,
+        filter_dim,
+        output_dim,
+        dtype,
+        dtype,
+        dtype,
+        Conv2DImageLayout.NHWC,
+        Conv2DFilterLayout.RSCF,
+        Conv2DImageLayout.NHWC,
+    ](
         device_input.tensor,
         device_filter.tensor,
         device_output_ref.tensor,

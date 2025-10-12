@@ -121,30 +121,9 @@ fn test_conv_cudnn[
         Conv2DFilterLayout.RSCF,
         Conv2DImageLayout.NHWC,
     ](
-        rebind[
-            NDBuffer[
-                input_type,
-                Conv2DImageLayout.NHWC.rank(),
-                MutableAnyOrigin,
-                input_dim,
-            ]
-        ](input_dev.tensor),
-        rebind[
-            NDBuffer[
-                filter_type,
-                Conv2DFilterLayout.RSCF.rank(),
-                MutableAnyOrigin,
-                filter_dim,
-            ]
-        ](filter_dev.tensor),
-        rebind[
-            NDBuffer[
-                output_type,
-                Conv2DImageLayout.NHWC.rank(),
-                MutableAnyOrigin,
-                output_dim,
-            ]
-        ](output_ref_dev.tensor),
+        input_dev.tensor,
+        filter_dev.tensor,
+        output_ref_dev.tensor,
         stride_dim,
         dilation_dim,
         pad_dim,

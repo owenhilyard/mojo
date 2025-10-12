@@ -3099,19 +3099,19 @@ struct Conv2DImageLayout(
 
     @always_inline("nodebug")
     fn n_index(self) -> UInt:
-        return [0, 0, -1][self.value]
+        return [0, 0][self.value]
 
     @always_inline("nodebug")
     fn h_index(self) -> UInt:
-        return [1, 3, -1][self.value]
+        return [1, 3][self.value]
 
     @always_inline("nodebug")
     fn w_index(self) -> UInt:
-        return [2, 1, -1][self.value]
+        return [2, 1][self.value]
 
     @always_inline("nodebug")
     fn c_index(self) -> UInt:
-        return [3, 2, -1][self.value]
+        return [3, 2][self.value]
 
     @always_inline("nodebug")
     fn try_downcast_2d(self) -> Optional[Conv2DImageLayout]:
@@ -3146,7 +3146,7 @@ struct Conv2DImageLayout(
 
     @always_inline("nodebug")
     fn rank(self) -> UInt:
-        return 2
+        return 4
 
 
 @fieldwise_init
@@ -3220,7 +3220,7 @@ struct Conv3DImageLayout(
 
     @always_inline("nodebug")
     fn rank(self) -> UInt:
-        return 3
+        return 5
 
 
 trait ConvFilterLayout(EqualityComparable):
@@ -3333,7 +3333,7 @@ struct Conv2DFilterLayout(
 
     @always_inline("nodebug")
     fn rank(self) -> UInt:
-        return 2
+        return 4
 
 
 @fieldwise_init
@@ -3408,7 +3408,7 @@ struct Conv3DFilterLayout(
 
     @always_inline("nodebug")
     fn rank(self) -> UInt:
-        return 3
+        return 5
 
 
 fn conv2d_gpu_naive[
@@ -3731,6 +3731,9 @@ fn conv_cudnn[
 
 
 fn conv_gpu[
+    InputLayoutType: ConvImageLayout,
+    FilterLayoutType: ConvFilterLayout,
+    OutputLayoutType: ConvImageLayout, //,
     input_rank: Int,
     filter_rank: Int,
     input_dim: DimList,
@@ -3739,27 +3742,52 @@ fn conv_gpu[
     input_type: DType,
     filter_type: DType,
     output_type: DType,
-    input_layout: Some[ConvImageLayout],
-    filter_layout: Some[ConvFilterLayout],
-    output_layout: Some[ConvImageLayout],
+    input_layout: InputLayoutType,
+    filter_layout: FilterLayoutType,
+    output_layout: OutputLayoutType,
     maybe_epilogue_func: OptionalReg[elementwise_simd_epilogue_type] = None,
 ](
-    input: NDBuffer[
-        input_type, input_layout.rank(), MutableAnyOrigin, input_dim
-    ],
-    filter: NDBuffer[
-        filter_type, filter_layout.rank(), MutableAnyOrigin, filter_dim
-    ],
+    input: NDBuffer[input_type, input_rank, MutableAnyOrigin, input_dim],
+    filter: NDBuffer[filter_type, filter_rank, MutableAnyOrigin, filter_dim],
     output: NDBuffer[
-        mut=True, output_type, input_layout.rank(), MutableAnyOrigin, output_dim
+        mut=True, output_type, input_rank, MutableAnyOrigin, output_dim
     ],
-    stride: IndexList[input_layout.rank() - 2],
-    dilation: IndexList[input_layout.rank() - 2],
-    padding: IndexList[input_layout.rank() - 2],
+    stride: IndexList[input_rank - 2],
+    dilation: IndexList[input_rank - 2],
+    padding: IndexList[input_rank - 2],
     num_groups: Int,
     ctx: DeviceContext,
 ) raises:
     alias block_size = 16
+
+    constrained[
+        input_rank == filter_rank,
+        "Rank mismatch: ",
+        String(input_rank),
+        " v ",
+        String(filter_rank),
+    ]()
+    constrained[
+        input_rank == input_layout.rank(),
+        "Invalid input rank: ",
+        String(input_rank),
+        " v ",
+        String(input_layout.rank()),
+    ]()
+    constrained[
+        input_rank == output_layout.rank(),
+        "Invalid output rank: ",
+        String(input_rank),
+        " v ",
+        String(output_layout.rank()),
+    ]()
+    constrained[
+        filter_rank == filter_layout.rank(),
+        "Invalid filter rank: ",
+        String(filter_rank),
+        " v ",
+        String(filter_layout.rank()),
+    ]()
 
     var grid_dim_y = ceildiv(
         output.dim[
